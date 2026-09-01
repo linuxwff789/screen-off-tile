@@ -10,7 +10,7 @@ import java.io.InputStreamReader;
 
 /**
  * Core control logic:
- *  - Turn off screen backlight (/sys/class/backlight/*/bl_power)
+ *  - Turn off screen backlight (/sys/class/backlight/panel0-backlight/bl_power)
  *  - Disable touch (inhibited attribute of input device)
  *  - Keep system awake (PARTIAL_WAKE_LOCK + svc power stayon true), no lock, no app kill
  *  - Requires root
