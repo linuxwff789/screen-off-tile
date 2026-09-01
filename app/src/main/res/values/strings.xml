@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">关屏磁贴</string>
+    <string name="app_desc">一键关闭屏幕（背光+触摸），不锁屏、不停应用。需要 Root。</string>
+    <string name="btn_off">关屏（背光+触摸）</string>
+    <string name="btn_on">恢复屏幕</string>
+    <string name="btn_add_tile">添加到快捷设置磁贴</string>
+    <string name="root_ok">Root 权限：✅ 已授予</string>
+    <string name="root_missing">Root 权限：❌ 未授予</string>
+    <string name="root_missing_detail">此应用需要通过 su 访问背光硬件，请确保已 Root 且授予权限。</string>
+    <string name="status_off">当前状态：屏幕已关闭（应用仍在运行）</string>
+    <string name="status_on">当前状态：屏幕正常</string>
+    <string name="dialog_ok">成功</string>
+    <string name="dialog_fail">失败</string>
+    <string name="result_off">屏幕已关闭：背光熄灭、触摸禁用，前台应用与后台应用继续运行。</string>
+    <string name="tile_hint">使用说明：\n1. 点击“添加到快捷设置磁贴”，按系统提示添加。\n2. 下拉通知栏，长按磁贴可设置。\n3. 关屏后触摸被禁用，可按【音量键】恢复屏幕。</string>
+    <string name="tile_on_label">关屏</string>
+    <string name="tile_on_subtitle">点击关闭屏幕</string>
+    <string name="tile_off_label">恢复</string>
+    <string name="tile_off_subtitle">点击恢复屏幕</string>
+</resources>

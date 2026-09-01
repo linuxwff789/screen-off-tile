@@ -1,0 +1,65 @@
+name: Build & Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK (release, debug-signed)
+        run: gradle assembleRelease --no-daemon
+        env:
+          GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-home
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-off-tile-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Get version from tag
+        id: ver
+        run: |
+          if [ -n "$GITHUB_REF_NAME" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=1.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: app/build/outputs/apk/release/app-release.apk
+          name: Screen Off Tile ${{ steps.ver.outputs.version }}
+          body: |
+            ## 关屏磁贴 v${{ steps.ver.outputs.version }}
+
+            一键关闭屏幕（背光+触摸），不锁屏、不停应用。需要 Root。
+
+            ### 使用说明
+            1. 安装 APK 并授予 Root 权限
+            2. 打开应用，点击「添加到快捷设置磁贴」
+            3. 下拉通知栏点击磁贴即可关屏
+            4. 关屏后触摸被禁用，按【音量键】恢复屏幕
+          generate_release_notes: true
