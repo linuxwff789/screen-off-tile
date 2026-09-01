@@ -9,11 +9,11 @@ import java.io.DataOutputStream;
 import java.io.InputStreamReader;
 
 /**
- * 核心控制逻辑：
- *  - 关闭屏幕背光（/sys/class/backlight/*/bl_power）
- *  - 禁用触摸（input 设备的 inhibited 属性）
- *  - 保持系统唤醒（PARTIAL_WAKE_LOCK + svc power stayon true），不锁屏、不杀应用
- *  - 需要 root 权限
+ * Core control logic:
+ *  - Turn off screen backlight (/sys/class/backlight/*/bl_power)
+ *  - Disable touch (inhibited attribute of input device)
+ *  - Keep system awake (PARTIAL_WAKE_LOCK + svc power stayon true), no lock, no app kill
+ *  - Requires root
  */
 public class ScreenController {
     private static final String PREFS = "screenoff";
