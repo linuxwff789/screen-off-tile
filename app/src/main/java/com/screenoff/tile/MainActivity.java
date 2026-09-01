@@ -97,6 +97,21 @@ public class MainActivity extends Activity {
         btnTile.setOnClickListener(v -> ScreenOffTileService.requestAdd(this));
         root.addView(btnTile);
 
+        // 无障碍服务状态与引导
+        accStatusView = new TextView(this);
+        accStatusView.setTextSize(15);
+        accStatusView.setTextColor(textColor);
+        accStatusView.setPadding(0, dp(24), 0, dp(8));
+        root.addView(accStatusView);
+
+        Button btnAcc = new Button(this);
+        btnAcc.setText(R.string.btn_enable_accessibility);
+        btnAcc.setOnClickListener(v -> {
+            startActivity(new android.content.Intent(
+                    android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        });
+        root.addView(btnAcc);
+
         TextView hint = new TextView(this);
         hint.setText(R.string.tile_hint);
         hint.setTextSize(13);
@@ -114,6 +129,19 @@ public class MainActivity extends Activity {
 
         boolean off = new ScreenController(this).isScreenOff();
         statusText.setText(off ? getString(R.string.status_off) : getString(R.string.status_on));
+
+        // 更新无障碍状态（按钮文字在 buildUi 里创建，这里通过 findViewById 不适用；用字段记录）
+        updateAccessibilityStatus();
+    }
+
+    private TextView accStatusView;
+
+    private void updateAccessibilityStatus() {
+        if (accStatusView == null) return;
+        boolean en = KeyInterceptorService.isEnabled(this);
+        accStatusView.setText(en
+                ? getString(R.string.acc_enabled)
+                : getString(R.string.acc_disabled));
     }
 
     private void showNoRoot() {

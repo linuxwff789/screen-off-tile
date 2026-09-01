@@ -18,4 +18,9 @@
     <string name="tile_on_subtitle">点击关闭屏幕</string>
     <string name="tile_off_label">恢复</string>
     <string name="tile_off_subtitle">点击恢复屏幕</string>
+    <string name="accessibility_label">关屏磁贴-音量键拦截</string>
+    <string name="accessibility_desc">用于在关屏状态下拦截音量键，按音量键恢复屏幕时不改变系统音量。仅在关屏激活时工作。</string>
+    <string name="btn_enable_accessibility">开启无障碍服务（拦截音量键）</string>
+    <string name="acc_enabled">✅ 无障碍服务已开启，按音量键恢复时不调音量</string>
+    <string name="acc_disabled">❌ 无障碍服务未开启，按音量键会调音量</string>
 </resources>
