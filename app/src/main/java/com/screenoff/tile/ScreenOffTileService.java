@@ -55,4 +55,16 @@ public class ScreenOffTileService extends TileService {
     public static void requestAdd(Context context) {
         TileService.requestListeningState(context, new ComponentName(context, ScreenOffTileService.class));
     }
+
+    /**
+     * 状态变化时通知系统刷新磁贴显示（无需用户下拉通知栏）。
+     * 会在关屏/恢复后调用，保证磁贴图标实时反映当前状态。
+     */
+    public static void notifyStateChanged(Context context) {
+        try {
+            TileService.requestListeningState(
+                    context,
+                    new ComponentName(context, ScreenOffTileService.class));
+        } catch (Exception ignored) {}
+    }
 }

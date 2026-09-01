@@ -62,9 +62,12 @@ public class ScreenController {
         }
     }
 
-    /** 关闭屏幕：背光灭 + 触摸禁用 + 保持唤醒 */
+    /** 关闭屏幕：背光灭 + 触摸禁用 + 保持唤醒（系统不超时、不锁屏） */
     public boolean turnScreenOff() {
         String script =
+            "PREV=$(settings get global stay_on_while_plugged_in 2>/dev/null)\n" +
+            "echo \"$PREV\" > /data/local/tmp/.screenoff_stayon 2>/dev/null\n" +
+            "svc power stayon true\n" +
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 1 > \"$BL\"\n" +
             "for d in /sys/class/input/input*/; do\n" +
@@ -81,12 +84,13 @@ public class ScreenController {
             prefs.edit().putBoolean(KEY_OFF, true).apply();
             acquireWakeLock();
             startVolumeMonitor();
+            ScreenOffTileService.notifyStateChanged(app);
             return true;
         }
         return false;
     }
 
-    /** 恢复屏幕：背光亮 + 触摸启用 */
+    /** 恢复屏幕：背光亮 + 触摸启用 + 恢复之前的 stayon 设置 */
     public boolean turnScreenOn() {
         String script =
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
@@ -99,12 +103,19 @@ public class ScreenController {
             "      ;;\n" +
             "  esac\n" +
             "done\n" +
-            "svc power stayon false 2>/dev/null\n" +
+            "PREV=$(cat /data/local/tmp/.screenoff_stayon 2>/dev/null)\n" +
+            "if [ \"$PREV\" != \"\" ] && [ \"$PREV\" != \"0\" ] && [ \"$PREV\" != \"null\" ]; then\n" +
+            "  svc power stayon true\n" +
+            "else\n" +
+            "  svc power stayon false\n" +
+            "fi\n" +
+            "rm /data/local/tmp/.screenoff_stayon 2>/dev/null\n" +
             "echo DONE_ON\n";
         String out = runRoot(script);
         releaseWakeLock();
         stopVolumeMonitor();
         prefs.edit().putBoolean(KEY_OFF, false).apply();
+        ScreenOffTileService.notifyStateChanged(app);
         return out.contains("DONE_ON");
     }
 
