@@ -115,6 +115,15 @@ public class ScreenController {
         return prefs.getBoolean(KEY_OFF, false) || realOff;
     }
 
+    /**
+     * 仅读 SharedPreferences 判断是否处于关屏状态（毫秒级，不执行 su）。
+     * 供无障碍 onKeyEvent（系统输入线程）使用，避免阻塞。
+     */
+    public static boolean isScreenOffPrefsOnly(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_OFF, false);
+    }
+
     /** 保持 CPU 唤醒，防止系统休眠（应用持续运行） */
     private void acquireWakeLock() {
         try {

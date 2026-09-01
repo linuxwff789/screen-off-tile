@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.ComponentName;
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityEvent;
@@ -11,9 +13,14 @@ import android.view.accessibility.AccessibilityEvent;
 /**
  * 无障碍服务：拦截音量键。
  * FLAG_REQUEST_FILTER_KEY_EVENTS 让 onKeyEvent 在系统处理之前被调用，
- * 返回 true 即"吞掉"事件 -> 系统不会调节音量，我们在这里触发恢复屏幕。
+ * 返回 true 即"吞掉"事件 -> 系统不会调节音量。
+ *
+ * 注意：onKeyEvent 运行在系统输入分发线程，绝不能在这里执行 su 阻塞操作。
+ * 因此状态判断只用 SharedPreferences（毫秒级），恢复操作在后台线程执行。
  */
 public class KeyInterceptorService extends AccessibilityService {
+
+    private final Handler bg = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onServiceConnected() {
@@ -32,13 +39,12 @@ public class KeyInterceptorService extends AccessibilityService {
             int code = event.getKeyCode();
             boolean isVol = code == KeyEvent.KEYCODE_VOLUME_UP
                     || code == KeyEvent.KEYCODE_VOLUME_DOWN;
-            if (isVol) {
-                ScreenController sc = new ScreenController(this);
-                if (sc.isScreenOff()) {
-                    // 吞掉事件，防止音量被调节，并触发恢复
-                    sc.turnScreenOn();
-                    return true;
-                }
+            if (isVol && ScreenController.isScreenOffPrefsOnly(this)) {
+                // 吞掉事件：系统不会调节音量
+                final Context c = this;
+                new Thread(() -> new ScreenController(c).turnScreenOn(),
+                        "restore-from-a11y").start();
+                return true;
             }
         }
         return super.onKeyEvent(event);
