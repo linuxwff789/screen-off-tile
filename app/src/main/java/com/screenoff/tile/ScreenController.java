@@ -1,7 +1,10 @@
 package com.screenoff.tile;
 
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.PowerManager;
 
 import java.io.BufferedReader;
@@ -23,6 +26,13 @@ public class ScreenController {
     private final SharedPreferences prefs;
     private PowerManager.WakeLock wakeLock;
     private volatile Thread volMonitor;
+    /** 监听屏幕自动亮起（如按电源键），自动恢复触摸 */
+    private final android.content.BroadcastReceiver screenOnReceiver = new android.content.BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            turnScreenOn();
+        }
+    };
 
     public ScreenController(Context context) {
         this.app = context.getApplicationContext();
@@ -84,6 +94,14 @@ public class ScreenController {
             prefs.edit().putBoolean(KEY_OFF, true).apply();
             acquireWakeLock();
             startVolumeMonitor();
+            // 监听屏幕自动亮起（如按电源键），自动恢复触摸
+            IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_ON);
+            filter.addAction(Intent.ACTION_USER_PRESENT);
+            if (Build.VERSION.SDK_INT >= 34) {
+                app.registerReceiver(screenOnReceiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                app.registerReceiver(screenOnReceiver, filter);
+            }
             ScreenOffTileService.notifyStateChanged(app);
             return true;
         }
@@ -112,6 +130,8 @@ public class ScreenController {
             "rm /data/local/tmp/.screenoff_stayon 2>/dev/null\n" +
             "echo DONE_ON\n";
         String out = runRoot(script);
+        // 取消屏幕亮起监听，避免重复调用
+        try { app.unregisterReceiver(screenOnReceiver); } catch (Exception ignored) {}
         releaseWakeLock();
         stopVolumeMonitor();
         prefs.edit().putBoolean(KEY_OFF, false).apply();
