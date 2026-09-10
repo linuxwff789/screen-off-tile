@@ -160,6 +160,7 @@ screen-off-tile/
 
 | 版本 | 更新内容 |
 |------|---------|
+| v1.1.5 | watchdog 恢复时精确还原 `stay_on_while_plugged_in` 原值（此前会误写成 0/7）；并把持久化关屏状态同步回 false，避免崩溃后磁贴状态残留 |
 | v1.1.4 | 新增 root 侧 watchdog：应用进程意外终止（崩溃/被强杀）时自动恢复背光+触摸，避免触摸永久禁用 |
 | v1.1.3 | 关屏时设置 `svc power stayon true` 防止系统休眠；磁贴状态实时刷新 |
 | v1.1.2 | 使用固定 keystore 签名，解决 KernelSU 授权因签名变化失效的问题 |

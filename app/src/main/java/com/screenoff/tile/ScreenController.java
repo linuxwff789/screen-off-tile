@@ -96,6 +96,27 @@ public class ScreenController {
             "done\n";
     }
 
+    /** 按关屏前备份精确恢复 stay_on_while_plugged_in（svc stayon true 只会粗粒度写回 7，丢失原值） */
+    private static String restoreStayon() {
+        return
+            "PREV=$(cat " + STAYON_FILE + " 2>/dev/null)\n" +
+            "if [ -n \"$PREV\" ] && [ \"$PREV\" != \"null\" ]; then\n" +
+            "  settings put global stay_on_while_plugged_in \"$PREV\" 2>/dev/null\n" +
+            "else\n" +
+            "  svc power stayon false 2>/dev/null\n" +
+            "fi\n" +
+            "rm -f " + STAYON_FILE + " 2>/dev/null\n";
+    }
+
+    /** 进程被杀后由 watchdog 代应用把持久化状态改回"未关屏"，避免下次启动状态残留 */
+    private static String syncPrefsOff() {
+        return
+            "for pf in /data/data/com.screenoff.tile/shared_prefs/screenoff.xml " +
+            "/data_mirror/data_ce/null/0/com.screenoff.tile/shared_prefs/screenoff.xml; do\n" +
+            "  [ -f \"$pf\" ] && sed -i 's/name=\"" + KEY_OFF + "\" value=\"true\"/name=\"" + KEY_OFF + "\" value=\"false\"/' \"$pf\" 2>/dev/null\n" +
+            "done\n";
+    }
+
     /** 关闭屏幕：背光灭 + 触摸禁用 + 保持唤醒（系统不超时、不锁屏） */
     public boolean turnScreenOff() {
         String script =
@@ -132,13 +153,7 @@ public class ScreenController {
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
             touchLoop("0") +
-            "PREV=$(cat " + STAYON_FILE + " 2>/dev/null)\n" +
-            "if [ \"$PREV\" != \"\" ] && [ \"$PREV\" != \"0\" ] && [ \"$PREV\" != \"null\" ]; then\n" +
-            "  svc power stayon true\n" +
-            "else\n" +
-            "  svc power stayon false\n" +
-            "fi\n" +
-            "rm " + STAYON_FILE + " 2>/dev/null\n" +
+            restoreStayon() +
             "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
             "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
             "rm -f " + WATCHDOG_PID + " " + WATCHDOG_SCRIPT + " 2>/dev/null\n" +
@@ -232,8 +247,9 @@ public class ScreenController {
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
             touchLoop("0") +
-            "svc power stayon false\n" +
-            "rm -f " + STAYON_FILE + " " + WATCHDOG_SCRIPT + " " + WATCHDOG_PID + "\n";
+            restoreStayon() +
+            syncPrefsOff() +
+            "rm -f " + WATCHDOG_SCRIPT + " " + WATCHDOG_PID + "\n";
         String script =
             "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
             "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
