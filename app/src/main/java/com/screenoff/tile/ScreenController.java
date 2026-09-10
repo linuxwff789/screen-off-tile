@@ -22,6 +22,17 @@ public class ScreenController {
     private static final String PREFS = "screenoff";
     private static final String KEY_OFF = "is_off";
 
+    /** 触摸屏 input 设备的 name 匹配模式（用于 case 语句） */
+    private static final String TOUCH_MATCH =
+        "*goodix*|*Goodix*|*synaptics*|*Synaptics*|*touchscreen*|*Touch*|*tsc*" +
+        "|*himax*|*novatek*|*focal*|*fts*|*silead*|*raydium*|*ektf*|*ilitek*" +
+        "|*chipone*|*egalax*|*aw8*|*ist*|*lcd*";
+
+    /** root 侧 watchdog 脚本 / PID 文件 / stayon 备份文件 */
+    private static final String WATCHDOG_SCRIPT = "/data/local/tmp/.screenoff_watchdog.sh";
+    private static final String WATCHDOG_PID = "/data/local/tmp/.screenoff_watchdog.pid";
+    private static final String STAYON_FILE = "/data/local/tmp/.screenoff_stayon";
+
     private final Context app;
     private final SharedPreferences prefs;
     private PowerManager.WakeLock wakeLock;
@@ -72,28 +83,35 @@ public class ScreenController {
         }
     }
 
+    /** 生成遍历 input 设备、写入 inhibited 的 shell 片段（value 为 1 禁用 / 0 启用） */
+    private static String touchLoop(String value) {
+        return
+            "for d in /sys/class/input/input*/; do\n" +
+            "  n=$(cat \"$d/name\" 2>/dev/null)\n" +
+            "  case \"$n\" in\n" +
+            "    " + TOUCH_MATCH + ")\n" +
+            "      echo " + value + " > \"$d/inhibited\" 2>/dev/null\n" +
+            "      ;;\n" +
+            "  esac\n" +
+            "done\n";
+    }
+
     /** 关闭屏幕：背光灭 + 触摸禁用 + 保持唤醒（系统不超时、不锁屏） */
     public boolean turnScreenOff() {
         String script =
             "PREV=$(settings get global stay_on_while_plugged_in 2>/dev/null)\n" +
-            "echo \"$PREV\" > /data/local/tmp/.screenoff_stayon 2>/dev/null\n" +
+            "echo \"$PREV\" > " + STAYON_FILE + " 2>/dev/null\n" +
             "svc power stayon true\n" +
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 1 > \"$BL\"\n" +
-            "for d in /sys/class/input/input*/; do\n" +
-            "  n=$(cat \"$d/name\" 2>/dev/null)\n" +
-            "  case \"$n\" in\n" +
-            "    *goodix*|*Goodix*|*synaptics*|*Synaptics*|*touchscreen*|*Touch*|*tsc*|*himax*|*novatek*|*focal*|*fts*|*silead*|*raydium*|*ektf*|*ilitek*|*chipone*|*egalax*|*aw8*|*ist*|*lcd*)\n" +
-            "      echo 1 > \"$d/inhibited\" 2>/dev/null\n" +
-            "      ;;\n" +
-            "  esac\n" +
-            "done\n" +
+            touchLoop("1") +
             "echo DONE_OFF\n";
         String out = runRoot(script);
         if (out.contains("DONE_OFF")) {
             prefs.edit().putBoolean(KEY_OFF, true).apply();
             acquireWakeLock();
             startVolumeMonitor();
+            startWatchdog(android.os.Process.myPid());
             // 监听屏幕自动亮起（如按电源键），自动恢复触摸
             IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_ON);
             filter.addAction(Intent.ACTION_USER_PRESENT);
@@ -113,21 +131,17 @@ public class ScreenController {
         String script =
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
-            "for d in /sys/class/input/input*/; do\n" +
-            "  n=$(cat \"$d/name\" 2>/dev/null)\n" +
-            "  case \"$n\" in\n" +
-            "    *goodix*|*Goodix*|*synaptics*|*Synaptics*|*touchscreen*|*Touch*|*tsc*|*himax*|*novatek*|*focal*|*fts*|*silead*|*raydium*|*ektf*|*ilitek*|*chipone*|*egalax*|*aw8*|*ist*|*lcd*)\n" +
-            "      echo 0 > \"$d/inhibited\" 2>/dev/null\n" +
-            "      ;;\n" +
-            "  esac\n" +
-            "done\n" +
-            "PREV=$(cat /data/local/tmp/.screenoff_stayon 2>/dev/null)\n" +
+            touchLoop("0") +
+            "PREV=$(cat " + STAYON_FILE + " 2>/dev/null)\n" +
             "if [ \"$PREV\" != \"\" ] && [ \"$PREV\" != \"0\" ] && [ \"$PREV\" != \"null\" ]; then\n" +
             "  svc power stayon true\n" +
             "else\n" +
             "  svc power stayon false\n" +
             "fi\n" +
-            "rm /data/local/tmp/.screenoff_stayon 2>/dev/null\n" +
+            "rm " + STAYON_FILE + " 2>/dev/null\n" +
+            "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
+            "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
+            "rm -f " + WATCHDOG_PID + " " + WATCHDOG_SCRIPT + " 2>/dev/null\n" +
             "echo DONE_ON\n";
         String out = runRoot(script);
         // 取消屏幕亮起监听，避免重复调用
@@ -202,5 +216,34 @@ public class ScreenController {
             t.interrupt();
             volMonitor = null;
         }
+    }
+
+    /**
+     * 启动 root 侧 watchdog：独立于应用进程运行（setsid 脱离会话），
+     * 轮询应用进程 PID 的 /proc/<pid>；一旦应用进程死亡（崩溃/被强杀/内存回收），
+     * 自动恢复背光 + 触摸 + 关闭 stayon，避免用户被"触摸永久禁用"锁死。
+     * 正常恢复时 turnScreenOn 会 kill 它。
+     */
+    private void startWatchdog(int pid) {
+        String body =
+            "echo $$ > " + WATCHDOG_PID + "\n" +
+            "P=/proc/" + pid + "\n" +
+            "while [ -d \"$P\" ]; do sleep 1; done\n" +
+            "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
+            "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
+            touchLoop("0") +
+            "svc power stayon false\n" +
+            "rm -f " + STAYON_FILE + " " + WATCHDOG_SCRIPT + " " + WATCHDOG_PID + "\n";
+        String script =
+            "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
+            "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
+            "rm -f " + WATCHDOG_PID + " " + WATCHDOG_SCRIPT + "\n" +
+            "cat > " + WATCHDOG_SCRIPT + " <<'EOF'\n" +
+            body +
+            "EOF\n" +
+            "chmod 700 " + WATCHDOG_SCRIPT + "\n" +
+            "setsid sh " + WATCHDOG_SCRIPT + " >/dev/null 2>&1 </dev/null &\n" +
+            "echo WATCHDOG_STARTED\n";
+        runRoot(script);
     }
 }
