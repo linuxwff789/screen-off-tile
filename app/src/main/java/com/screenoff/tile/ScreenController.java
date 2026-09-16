@@ -96,16 +96,18 @@ public class ScreenController {
             "done\n";
     }
 
-    /** 按关屏前备份精确恢复 stay_on_while_plugged_in（svc stayon true 只会粗粒度写回 7，丢失原值） */
+    /** 按关屏前备份精确恢复 stay_on_while_plugged_in（svc stayon true 只会粗粒度写回 7，丢失原值）。
+     *  幂等：备份文件不存在说明另一恢复路径(app/watchdog)已恢复过，什么都不做。
+     *  旧版 else 分支 svc stayon false 会在双路径竞争时把用户原值抹成 0，已删。 */
     private static String restoreStayon() {
         return
-            "PREV=$(cat " + STAYON_FILE + " 2>/dev/null)\n" +
-            "if [ -n \"$PREV\" ] && [ \"$PREV\" != \"null\" ]; then\n" +
-            "  settings put global stay_on_while_plugged_in \"$PREV\" 2>/dev/null\n" +
-            "else\n" +
-            "  svc power stayon false 2>/dev/null\n" +
-            "fi\n" +
-            "rm -f " + STAYON_FILE + " 2>/dev/null\n";
+            "if [ -f " + STAYON_FILE + " ]; then\n" +
+            "  PREV=$(cat " + STAYON_FILE + " 2>/dev/null)\n" +
+            "  if [ -n \"$PREV\" ] && [ \"$PREV\" != \"null\" ]; then\n" +
+            "    settings put global stay_on_while_plugged_in \"$PREV\" 2>/dev/null\n" +
+            "  fi\n" +
+            "  rm -f " + STAYON_FILE + " 2>/dev/null\n" +
+            "fi\n";
     }
 
     /** 进程被杀后由 watchdog 代应用把持久化状态改回"未关屏"，避免下次启动状态残留 */
