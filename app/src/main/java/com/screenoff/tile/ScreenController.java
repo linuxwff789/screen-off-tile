@@ -248,9 +248,10 @@ public class ScreenController {
             "sleep 2\n" +
             "while [ -d \"$P\" ]; do\n" +
             "  # 应用被冻结(cached app freezer)时 /proc 永不消失, 但 root watchdog 不受影响;\n" +
-            "  # 背光离开关屏值(用户按电源键亮屏/AOD)时应用自身恢复路径已死, 由本脚本代为恢复触摸\n" +
+            "  # 用户亮屏(用户按电源键, bl=0)时应用自身恢复路径已死, 由本脚本代为恢复触摸\n" +
             "  B=$(cat \"$BLF\" 2>/dev/null)\n" +
-            "  if [ \"$B\" != \"1\" ]; then\n" +
+            "  # 只在真正全亮(bl=0)时代为恢复; AOD(bl=4)仍属灭屏, 不能提前释放触摸\n" +
+            "  if [ \"$B\" = \"0\" ]; then\n" +
             touchLoop("0") +
             restoreStayon() +
             syncPrefsOff() +
