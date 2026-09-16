@@ -150,13 +150,14 @@ public class ScreenController {
     /** 恢复屏幕：背光亮 + 触摸启用 + 恢复之前的 stayon 设置 */
     public boolean turnScreenOn() {
         String script =
+            // 先杀 watchdog 再恢复, 避免其恢复分支与本函数竞争 stayon 备份文件
+            "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
+            "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
+            "rm -f " + WATCHDOG_PID + " " + WATCHDOG_SCRIPT + " 2>/dev/null\n" +
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
             touchLoop("0") +
             restoreStayon() +
-            "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
-            "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
-            "rm -f " + WATCHDOG_PID + " " + WATCHDOG_SCRIPT + " 2>/dev/null\n" +
             "echo DONE_ON\n";
         String out = runRoot(script);
         // 取消屏幕亮起监听，避免重复调用
@@ -243,7 +244,21 @@ public class ScreenController {
         String body =
             "echo $$ > " + WATCHDOG_PID + "\n" +
             "P=/proc/" + pid + "\n" +
-            "while [ -d \"$P\" ]; do sleep 1; done\n" +
+            "BLF=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
+            "sleep 2\n" +
+            "while [ -d \"$P\" ]; do\n" +
+            "  # 应用被冻结(cached app freezer)时 /proc 永不消失, 但 root watchdog 不受影响;\n" +
+            "  # 背光离开关屏值(用户按电源键亮屏/AOD)时应用自身恢复路径已死, 由本脚本代为恢复触摸\n" +
+            "  B=$(cat \"$BLF\" 2>/dev/null)\n" +
+            "  if [ \"$B\" != \"1\" ]; then\n" +
+            touchLoop("0") +
+            restoreStayon() +
+            syncPrefsOff() +
+            "    rm -f " + WATCHDOG_SCRIPT + " " + WATCHDOG_PID + "\n" +
+            "    exit 0\n" +
+            "  fi\n" +
+            "  sleep 1\n" +
+            "done\n" +
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
             touchLoop("0") +
