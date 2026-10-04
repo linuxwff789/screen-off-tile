@@ -28,10 +28,17 @@ public class ScreenController {
         "|*himax*|*novatek*|*focal*|*fts*|*silead*|*raydium*|*ektf*|*ilitek*" +
         "|*chipone*|*egalax*|*aw8*|*ist*|*lcd*";
 
-    /** root 侧 watchdog 脚本 / PID 文件 / stayon 备份文件 */
+    /** root 侧 watchdog 脚本 / PID 文件 / 备份文件 */
     private static final String WATCHDOG_SCRIPT = "/data/local/tmp/.screenoff_watchdog.sh";
     private static final String WATCHDOG_PID = "/data/local/tmp/.screenoff_watchdog.pid";
     private static final String STAYON_FILE = "/data/local/tmp/.screenoff_stayon";
+    private static final String TIMEOUT_FILE = "/data/local/tmp/.screenoff_timeout";
+    private static final String DREAM_FILE = "/data/local/tmp/.screenoff_screensaver";
+
+    /** root 持有的内核 wakelock 名称（独立于应用进程，冻结/被杀也不释放，直到恢复） */
+    private static final String KERNEL_WAKELOCK = "screen_off_tile";
+    /** 关屏期间把 framework 的熄屏超时顶到最大，避免它误判“无操作”而真正熄屏休眠 */
+    private static final int MAX_TIMEOUT = 2147483647;
 
     private final Context app;
     private final SharedPreferences prefs;
@@ -119,12 +126,56 @@ public class ScreenController {
             "done\n";
     }
 
+    /** 还原关屏前的 screen_off_timeout（幂等：文件不在说明已恢复过） */
+    private static String restoreTimeout() {
+        return
+            "if [ -f " + TIMEOUT_FILE + " ]; then\n" +
+            "  T=$(cat " + TIMEOUT_FILE + " 2>/dev/null)\n" +
+            "  if [ -n \"$T\" ] && [ \"$T\" != \"null\" ]; then\n" +
+            "    settings put system screen_off_timeout \"$T\" 2>/dev/null\n" +
+            "  fi\n" +
+            "  rm -f " + TIMEOUT_FILE + " 2>/dev/null\n" +
+            "fi\n";
+    }
+
+    /** 还原关屏前的 screensaver（dream）开关（幂等） */
+    private static String restoreDream() {
+        return
+            "if [ -f " + DREAM_FILE + " ]; then\n" +
+            "  S=$(cat " + DREAM_FILE + " 2>/dev/null)\n" +
+            "  if [ -n \"$S\" ] && [ \"$S\" != \"null\" ]; then\n" +
+            "    settings put secure screensaver_enabled \"$S\" 2>/dev/null\n" +
+            "  fi\n" +
+            "  rm -f " + DREAM_FILE + " 2>/dev/null\n" +
+            "fi\n";
+    }
+
+    /** 恢复时的公共收尾：释放内核 wakelock、还原熄屏超时/屏保、停掉前台保持服务。
+     *  幂等，可被 app 的 turnScreenOn 与 root watchdog 两条路径重复执行。 */
+    private static String recoverCommon() {
+        return
+            "echo " + KERNEL_WAKELOCK + " > /sys/power/wake_unlock 2>/dev/null\n" +
+            restoreTimeout() +
+            restoreDream() +
+            "am stopservice com.screenoff.tile/.KeepAliveService >/dev/null 2>&1\n";
+    }
+
     /** 关闭屏幕：背光灭 + 触摸禁用 + 保持唤醒（系统不超时、不锁屏） */
     public boolean turnScreenOff() {
         String script =
             "PREV=$(settings get global stay_on_while_plugged_in 2>/dev/null)\n" +
             "echo \"$PREV\" > " + STAYON_FILE + " 2>/dev/null\n" +
             "svc power stayon true\n" +
+            // 关键：framework 仍以为屏幕亮着，必须把它的熄屏超时顶到最大，
+            // 否则 30s 后 framework 自己熄屏 -> 休眠 -> cached app freezer 冻结应用
+            "T=$(settings get system screen_off_timeout 2>/dev/null)\n" +
+            "echo \"$T\" > " + TIMEOUT_FILE + " 2>/dev/null\n" +
+            "settings put system screen_off_timeout " + MAX_TIMEOUT + "\n" +
+            "SS=$(settings get secure screensaver_enabled 2>/dev/null)\n" +
+            "echo \"$SS\" > " + DREAM_FILE + " 2>/dev/null\n" +
+            "settings put secure screensaver_enabled 0\n" +
+            // 由 root 直接持有的内核 wakelock：不依赖应用进程，冻结/被杀都不影响，确保不休眠
+            "echo " + KERNEL_WAKELOCK + " > /sys/power/wake_lock 2>/dev/null\n" +
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 1 > \"$BL\"\n" +
             touchLoop("1") +
@@ -133,6 +184,7 @@ public class ScreenController {
         if (out.contains("DONE_OFF")) {
             prefs.edit().putBoolean(KEY_OFF, true).apply();
             acquireWakeLock();
+            startKeepAlive(app);
             startVolumeMonitor();
             startWatchdog(android.os.Process.myPid());
             // 监听屏幕自动亮起（如按电源键），自动恢复触摸
@@ -156,6 +208,7 @@ public class ScreenController {
             "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
             "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
             "rm -f " + WATCHDOG_PID + " " + WATCHDOG_SCRIPT + " 2>/dev/null\n" +
+            recoverCommon() +
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
             touchLoop("0") +
@@ -165,6 +218,7 @@ public class ScreenController {
         // 取消屏幕亮起监听，避免重复调用
         try { app.unregisterReceiver(screenOnReceiver); } catch (Exception ignored) {}
         releaseWakeLock();
+        stopKeepAlive(app);
         stopVolumeMonitor();
         prefs.edit().putBoolean(KEY_OFF, false).apply();
         ScreenOffTileService.notifyStateChanged(app);
@@ -185,6 +239,25 @@ public class ScreenController {
     public static boolean isScreenOffPrefsOnly(Context context) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getBoolean(KEY_OFF, false);
+    }
+
+    /** 关屏期间启动前台服务，避免进程被 cached app freezer 冻结（音量键拦截/磁贴状态刷新需要进程活着） */
+    public static void startKeepAlive(Context context) {
+        try {
+            Intent i = new Intent(context, KeepAliveService.class)
+                    .setAction(KeepAliveService.ACTION_START);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(i);
+            } else {
+                context.startService(i);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    public static void stopKeepAlive(Context context) {
+        try {
+            context.stopService(new Intent(context, KeepAliveService.class));
+        } catch (Exception ignored) {}
     }
 
     /** 保持 CPU 唤醒，防止系统休眠（应用持续运行） */
@@ -255,6 +328,7 @@ public class ScreenController {
             "  # 只在真正全亮(bl=0)时代为恢复; AOD(bl=4)仍属灭屏, 不能提前释放触摸\n" +
             "  if [ \"$B\" = \"0\" ]; then\n" +
             touchLoop("0") +
+            recoverCommon() +
             restoreStayon() +
             syncPrefsOff() +
             "    rm -f " + WATCHDOG_SCRIPT + " " + WATCHDOG_PID + "\n" +
@@ -265,6 +339,7 @@ public class ScreenController {
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
             touchLoop("0") +
+            recoverCommon() +
             restoreStayon() +
             syncPrefsOff() +
             "rm -f " + WATCHDOG_SCRIPT + " " + WATCHDOG_PID + "\n";

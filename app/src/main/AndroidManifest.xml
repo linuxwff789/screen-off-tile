@@ -3,6 +3,9 @@
     package="com.screenoff.tile">
 
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="@string/app_name"
@@ -40,6 +43,16 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 关屏期间前台服务：防止 cached app freezer 冻结进程（音量键拦截/磁贴刷新需要进程活着） -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="保持屏幕关闭期间应用进程存活，防止系统冻结后台进程" />
         </service>
     </application>
 </manifest>

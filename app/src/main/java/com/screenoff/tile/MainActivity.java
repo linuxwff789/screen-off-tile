@@ -23,7 +23,17 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        requestNotificationPermission();
         buildUi();
+    }
+
+    /** Android 13+ 前台服务通知需要 POST_NOTIFICATIONS（拒绝也能保活，只是看不到通知） */
+    private void requestNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 100);
+        }
     }
 
     @Override

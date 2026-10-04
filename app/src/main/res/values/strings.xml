@@ -23,4 +23,9 @@
     <string name="btn_enable_accessibility">开启无障碍服务（拦截音量键）</string>
     <string name="acc_enabled">✅ 无障碍服务已开启，按音量键恢复时不调音量</string>
     <string name="acc_disabled">❌ 无障碍服务未开启，按音量键会调音量</string>
+    <string name="keepalive_channel">关屏保持</string>
+    <string name="keepalive_channel_desc">关屏期间保持应用进程存活，避免被系统冻结</string>
+    <string name="keepalive_title">关屏模式中</string>
+    <string name="keepalive_text">屏幕已关闭，应用继续运行。可按音量键或点「恢复屏幕」。</string>
+    <string name="keepalive_restore">恢复屏幕</string>
 </resources>
