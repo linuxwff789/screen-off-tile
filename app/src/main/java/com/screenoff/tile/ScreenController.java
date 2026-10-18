@@ -55,10 +55,16 @@ public class ScreenController {
     private volatile Thread volMonitor;
     /** getevent 子进程，恢复时必须显式销毁，否则每次关屏漏一个 root 进程 */
     private volatile Process volProc;
+    /**
+     * 关屏脚本自己把 framework 从 Dozing 唤醒时会发出 SCREEN_ON，
+     * 这个广播不能当成"用户亮屏"来处理，否则刚关屏就被自己恢复掉。
+     */
+    private volatile long ignoreScreenOnUntil = 0;
     /** 监听屏幕自动亮起（如按电源键），自动恢复触摸 */
     private final android.content.BroadcastReceiver screenOnReceiver = new android.content.BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
+            if (System.currentTimeMillis() < ignoreScreenOnUntil) return;
             turnScreenOn();
         }
     };
@@ -230,11 +236,13 @@ public class ScreenController {
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 1 > \"$BL\"\n" +
             touchLoop("1") +
-            "sleep 1\n" +
+            "sleep 2\n" +
             "W1=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\n" +
             "FG=$(dumpsys activity services com.screenoff.tile 2>/dev/null | grep -c 'isForeground=true')\n" +
             "echo \"wake=$W1 fgs=$FG freezer=$(" + BIN_SETTINGS + " get global cached_apps_freezer) bl=$(cat $BL 2>/dev/null)\"\n" +
             "echo DONE_OFF\n";
+        // 脚本里若用 input keyevent 224 把 framework 拉起来, SCREEN_ON 会跟着来, 先屏蔽 8s
+        ignoreScreenOnUntil = System.currentTimeMillis() + 8000;
         String out = runRoot(withLog(script));
         if (out.contains("DONE_OFF")) {
             prefs.edit().putBoolean(KEY_OFF, true).apply();
