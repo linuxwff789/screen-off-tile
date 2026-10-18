@@ -182,6 +182,22 @@ public class ScreenController {
     }
 
     /**
+     * 把 framework 从 Dozing/AOD 拉回 Awake。
+     * 注意：实测 KEYCODE_WAKEUP(224) 在 AOSPA/fuxi 上对 Dozing 无效，必须用
+     * KEYCODE_POWER(26) 做切换（先判状态，避免把已经 Awake 的机器按睡）。
+     */
+    private static String wakeIfNeeded() {
+        return
+            "W0=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\n" +
+            "if [ \"$W0\" != \"Awake\" ]; then\n" +
+            "  " + BIN_INPUT + " keyevent 26\n" +
+            "  sleep 1\n" +
+            "  W1=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\n" +
+            "  if [ \"$W1\" != \"Awake\" ]; then " + BIN_INPUT + " keyevent 26; sleep 1; fi\n" +
+            "fi\n";
+    }
+
+    /**
      * 把一段 root 脚本的输出同时写进日志文件（超过 256KB 轮转一次）。
      * 出问题时 /data/local/tmp/.screenoff.log 里能看到每条命令的实际结果。
      */
@@ -209,8 +225,7 @@ public class ScreenController {
         String script =
             // framework 若还在 Dozing/AOD（锁屏后磁贴仍可点），只写 bl_power 系统会继续 Doze，
             // 应用照样被冻结 —— 先强制把它拉到 Awake，关屏态才有意义
-            "W0=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\n" +
-            "if [ \"$W0\" != \"Awake\" ]; then " + BIN_INPUT + " keyevent 224; sleep 1; fi\n" +
+            wakeIfNeeded() +
             "PREV=$(" + BIN_SETTINGS + " get global stay_on_while_plugged_in 2>/dev/null)\n" +
             "echo \"$PREV\" > " + STAYON_FILE + " 2>/dev/null\n" +
             BIN_SVC + " power stayon true\n" +
@@ -269,8 +284,7 @@ public class ScreenController {
     public boolean turnScreenOn() {
         String script =
             // framework 若被电源键按下去了(AOD/Doze), 只写 bl_power=0 屏幕是黑的, 先唤醒
-            "W0=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\n" +
-            "if [ \"$W0\" != \"Awake\" ]; then " + BIN_INPUT + " keyevent 224; sleep 1; fi\n" +
+            wakeIfNeeded() +
             // 先杀 watchdog 再恢复, 避免其恢复分支与本函数竞争 stayon 备份文件
             "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
             "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
@@ -365,8 +379,9 @@ public class ScreenController {
                     if (vol || power) {
                         p.destroy();
                         if (power) {
-                            // 先唤醒 framework，否则只写 bl_power=0 屏幕还是黑的
-                            self.runRoot(BIN_INPUT + " keyevent 224");
+                            // 等 framework 先把这次电源键处理成"休眠"，否则 turnScreenOn 里的
+                            // 状态判断可能还看到 Awake，导致该唤醒的时候没唤醒
+                            try { Thread.sleep(800); } catch (InterruptedException ignored) {}
                         }
                         self.turnScreenOn();
                         break;

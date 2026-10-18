@@ -171,6 +171,7 @@ screen-off-tile/
 
 | 版本 | 更新内容 |
 |------|---------|
+| v1.1.12 | 唤醒改用 `KEYCODE_POWER(26)`：实测 `KEYCODE_WAKEUP(224)` 在这台机器上对 Dozing 无效，电源键恢复时会停在「Dozing + 背光已亮」的半死状态；电源键路径先等 800ms 让 framework 处理完休眠再唤醒 |
 | v1.1.11 | 修复 v1.1.10 引入的自恢复：从 AOD/锁屏点磁贴时脚本会自己唤醒 framework，随之而来的 `SCREEN_ON` 广播被当成"用户亮屏"导致刚关屏就被恢复；现在关屏后 8s 内忽略该广播 |
 | v1.1.10 | 修复「关屏后仍进入休眠」：前台服务改由 root 拉起（A14 + targetSdk 35 下从磁贴后台 startForegroundService 会被 AMS 拒绝，v1.1.9 的保活实际从未生效）；关屏期间关闭 `cached_apps_freezer`（A14 上它不看屏幕状态，亮屏也冻结 cached 进程）；进入关屏态前强制 framework 到 Awake（在 AOD/锁屏点磁贴会让系统继续 Doze）；电源键改为亮屏恢复；su 移出主线程；getevent 子进程不再泄漏；新增 `/data/local/tmp/.screenoff.log` 过程日志 |
 | v1.1.9 | 修复「系统仍会自动休眠并冻结应用」：关屏时把 framework 的 `screen_off_timeout` 顶到最大（并关屏保），避免 framework 自己的无操作熄屏；新增 root 持有的内核 wakelock（独立于进程，冻结/被杀都不释放）；新增前台保持服务，防止 cached app freezer 冻结本应用 |
