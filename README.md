@@ -150,6 +150,13 @@ screen-off-tile/
 ### Q4：关屏后应用会耗电吗？
 - 关屏期间持有唤醒锁，CPU 不睡眠，功耗与屏幕亮着时相近。适合短时间挂机场景；长时间不用建议普通锁屏
 
+> **v1.1.10 起**：关屏时由 root 直接拉起前台服务（targetSdk 35 下应用自己
+> `startForegroundService` 会被 AMS 以 `Background started FGS: Disallowed` 拒绝），
+> 并且全局关闭 `cached_apps_freezer`（Android 14 上它不看屏幕状态，亮屏也会冻结 cached 进程），
+> 所以挂机应用和本应用都不会被冻结；进入关屏态前会先把 framework 强制拉到 Awake
+> （否则在 AOD/锁屏上点磁贴，系统会继续 Doze）；电源键在关屏态下改为「亮屏恢复」。
+> 全过程日志写在 `/data/local/tmp/.screenoff.log`。
+>
 > **v1.1.9 起**：关屏时会临时把系统「熄屏超时」顶到最大并保持一个 root 内核 wakelock，
 > 因此 framework 不会在 30 秒后自己熄屏休眠，第三方应用（下载/游戏/录音）不会被 cached app freezer 冻结。
 > 同时本应用自身以前台服务保活，音量键拦截和磁贴状态刷新在关屏期间仍有效。恢复时会精确还原你的原设置。
@@ -164,6 +171,7 @@ screen-off-tile/
 
 | 版本 | 更新内容 |
 |------|---------|
+| v1.1.10 | 修复「关屏后仍进入休眠」：前台服务改由 root 拉起（A14 + targetSdk 35 下从磁贴后台 startForegroundService 会被 AMS 拒绝，v1.1.9 的保活实际从未生效）；关屏期间关闭 `cached_apps_freezer`（A14 上它不看屏幕状态，亮屏也冻结 cached 进程）；进入关屏态前强制 framework 到 Awake（在 AOD/锁屏点磁贴会让系统继续 Doze）；电源键改为亮屏恢复；su 移出主线程；getevent 子进程不再泄漏；新增 `/data/local/tmp/.screenoff.log` 过程日志 |
 | v1.1.9 | 修复「系统仍会自动休眠并冻结应用」：关屏时把 framework 的 `screen_off_timeout` 顶到最大（并关屏保），避免 framework 自己的无操作熄屏；新增 root 持有的内核 wakelock（独立于进程，冻结/被杀都不释放）；新增前台保持服务，防止 cached app freezer 冻结本应用 |
 | v1.1.5 | watchdog 恢复时精确还原 `stay_on_while_plugged_in` 原值（此前会误写成 0/7）；并把持久化关屏状态同步回 false，避免崩溃后磁贴状态残留 |
 | v1.1.4 | 新增 root 侧 watchdog：应用进程意外终止（崩溃/被强杀）时自动恢复背光+触摸，避免触摸永久禁用 |

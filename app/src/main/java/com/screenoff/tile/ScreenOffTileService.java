@@ -2,6 +2,8 @@ package com.screenoff.tile;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.service.quicksettings.Tile;
 import android.service.quicksettings.TileService;
 
@@ -25,13 +27,17 @@ public class ScreenOffTileService extends TileService {
     @Override
     public void onClick() {
         super.onClick();
-        ScreenController sc = new ScreenController(this);
-        if (sc.isScreenOff()) {
-            sc.turnScreenOn();
-        } else {
-            sc.turnScreenOff();
-        }
-        updateTile();
+        // 关屏/恢复要跑好几次 su（几百毫秒到几秒），不能占主线程（TileService 回调在主线程）
+        final Context ctx = getApplicationContext();
+        new Thread(() -> {
+            ScreenController sc = new ScreenController(ctx);
+            if (sc.isScreenOff()) {
+                sc.turnScreenOn();
+            } else {
+                sc.turnScreenOff();
+            }
+            new Handler(Looper.getMainLooper()).post(this::updateTile);
+        }, "tile-onclick").start();
     }
 
     private void updateTile() {

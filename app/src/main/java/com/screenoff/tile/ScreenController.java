@@ -34,6 +34,15 @@ public class ScreenController {
     private static final String STAYON_FILE = "/data/local/tmp/.screenoff_stayon";
     private static final String TIMEOUT_FILE = "/data/local/tmp/.screenoff_timeout";
     private static final String DREAM_FILE = "/data/local/tmp/.screenoff_screensaver";
+    private static final String FREEZER_FILE = "/data/local/tmp/.screenoff_freezer";
+    /** 关屏/恢复过程日志（root 写），出问题时直接看这个文件 */
+    private static final String LOG_FILE = "/data/local/tmp/.screenoff.log";
+
+    /** 统一走绝对路径：从磁贴/无障碍回调里起的 su 环境 PATH 不一定完整 */
+    private static final String BIN_SETTINGS = "/system/bin/settings";
+    private static final String BIN_SVC = "/system/bin/svc";
+    private static final String BIN_AM = "/system/bin/am";
+    private static final String BIN_INPUT = "/system/bin/input";
 
     /** root 持有的内核 wakelock 名称（独立于应用进程，冻结/被杀也不释放，直到恢复） */
     private static final String KERNEL_WAKELOCK = "screen_off_tile";
@@ -44,6 +53,8 @@ public class ScreenController {
     private final SharedPreferences prefs;
     private PowerManager.WakeLock wakeLock;
     private volatile Thread volMonitor;
+    /** getevent 子进程，恢复时必须显式销毁，否则每次关屏漏一个 root 进程 */
+    private volatile Process volProc;
     /** 监听屏幕自动亮起（如按电源键），自动恢复触摸 */
     private final android.content.BroadcastReceiver screenOnReceiver = new android.content.BroadcastReceiver() {
         @Override
@@ -111,7 +122,7 @@ public class ScreenController {
             "if [ -f " + STAYON_FILE + " ]; then\n" +
             "  PREV=$(cat " + STAYON_FILE + " 2>/dev/null)\n" +
             "  if [ -n \"$PREV\" ] && [ \"$PREV\" != \"null\" ]; then\n" +
-            "    settings put global stay_on_while_plugged_in \"$PREV\" 2>/dev/null\n" +
+            "    " + BIN_SETTINGS + " put global stay_on_while_plugged_in \"$PREV\" 2>/dev/null\n" +
             "  fi\n" +
             "  rm -f " + STAYON_FILE + " 2>/dev/null\n" +
             "fi\n";
@@ -132,9 +143,23 @@ public class ScreenController {
             "if [ -f " + TIMEOUT_FILE + " ]; then\n" +
             "  T=$(cat " + TIMEOUT_FILE + " 2>/dev/null)\n" +
             "  if [ -n \"$T\" ] && [ \"$T\" != \"null\" ]; then\n" +
-            "    settings put system screen_off_timeout \"$T\" 2>/dev/null\n" +
+            "    " + BIN_SETTINGS + " put system screen_off_timeout \"$T\" 2>/dev/null\n" +
             "  fi\n" +
             "  rm -f " + TIMEOUT_FILE + " 2>/dev/null\n" +
+            "fi\n";
+    }
+
+    /** 还原关屏前的 cached_apps_freezer（原值 null 则直接删掉这条设置） */
+    private static String restoreFreezer() {
+        return
+            "if [ -f " + FREEZER_FILE + " ]; then\n" +
+            "  F=$(cat " + FREEZER_FILE + " 2>/dev/null)\n" +
+            "  if [ -z \"$F\" ] || [ \"$F\" = \"null\" ]; then\n" +
+            "    " + BIN_SETTINGS + " delete global cached_apps_freezer 2>/dev/null\n" +
+            "  else\n" +
+            "    " + BIN_SETTINGS + " put global cached_apps_freezer \"$F\" 2>/dev/null\n" +
+            "  fi\n" +
+            "  rm -f " + FREEZER_FILE + " 2>/dev/null\n" +
             "fi\n";
     }
 
@@ -144,10 +169,22 @@ public class ScreenController {
             "if [ -f " + DREAM_FILE + " ]; then\n" +
             "  S=$(cat " + DREAM_FILE + " 2>/dev/null)\n" +
             "  if [ -n \"$S\" ] && [ \"$S\" != \"null\" ]; then\n" +
-            "    settings put secure screensaver_enabled \"$S\" 2>/dev/null\n" +
+            "    " + BIN_SETTINGS + " put secure screensaver_enabled \"$S\" 2>/dev/null\n" +
             "  fi\n" +
             "  rm -f " + DREAM_FILE + " 2>/dev/null\n" +
             "fi\n";
+    }
+
+    /**
+     * 把一段 root 脚本的输出同时写进日志文件（超过 256KB 轮转一次）。
+     * 出问题时 /data/local/tmp/.screenoff.log 里能看到每条命令的实际结果。
+     */
+    private static String withLog(String script) {
+        return
+            "S=$(/system/bin/stat -c %s " + LOG_FILE + " 2>/dev/null)\n" +
+            "if [ -n \"$S\" ] && [ \"$S\" -gt 262144 ]; then mv " + LOG_FILE + " " + LOG_FILE + ".1; fi\n" +
+            "echo \"---- $(/system/bin/date +%F_%H:%M:%S) ----\" >> " + LOG_FILE + "\n" +
+            "( " + script + " ) 2>&1 | /system/bin/tee -a " + LOG_FILE + "\n";
     }
 
     /** 恢复时的公共收尾：释放内核 wakelock、还原熄屏超时/屏保、停掉前台保持服务。
@@ -157,33 +194,52 @@ public class ScreenController {
             "echo " + KERNEL_WAKELOCK + " > /sys/power/wake_unlock 2>/dev/null\n" +
             restoreTimeout() +
             restoreDream() +
-            "am stopservice com.screenoff.tile/.KeepAliveService >/dev/null 2>&1\n";
+            restoreFreezer() +
+            BIN_AM + " stopservice com.screenoff.tile/.KeepAliveService >/dev/null 2>&1\n";
     }
 
     /** 关闭屏幕：背光灭 + 触摸禁用 + 保持唤醒（系统不超时、不锁屏） */
     public boolean turnScreenOff() {
         String script =
-            "PREV=$(settings get global stay_on_while_plugged_in 2>/dev/null)\n" +
+            // framework 若还在 Dozing/AOD（锁屏后磁贴仍可点），只写 bl_power 系统会继续 Doze，
+            // 应用照样被冻结 —— 先强制把它拉到 Awake，关屏态才有意义
+            "W0=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\n" +
+            "if [ \"$W0\" != \"Awake\" ]; then " + BIN_INPUT + " keyevent 224; sleep 1; fi\n" +
+            "PREV=$(" + BIN_SETTINGS + " get global stay_on_while_plugged_in 2>/dev/null)\n" +
             "echo \"$PREV\" > " + STAYON_FILE + " 2>/dev/null\n" +
-            "svc power stayon true\n" +
+            BIN_SVC + " power stayon true\n" +
             // 关键：framework 仍以为屏幕亮着，必须把它的熄屏超时顶到最大，
             // 否则 30s 后 framework 自己熄屏 -> 休眠 -> cached app freezer 冻结应用
-            "T=$(settings get system screen_off_timeout 2>/dev/null)\n" +
+            "T=$(" + BIN_SETTINGS + " get system screen_off_timeout 2>/dev/null)\n" +
             "echo \"$T\" > " + TIMEOUT_FILE + " 2>/dev/null\n" +
-            "settings put system screen_off_timeout " + MAX_TIMEOUT + "\n" +
-            "SS=$(settings get secure screensaver_enabled 2>/dev/null)\n" +
+            BIN_SETTINGS + " put system screen_off_timeout " + MAX_TIMEOUT + "\n" +
+            "SS=$(" + BIN_SETTINGS + " get secure screensaver_enabled 2>/dev/null)\n" +
             "echo \"$SS\" > " + DREAM_FILE + " 2>/dev/null\n" +
-            "settings put secure screensaver_enabled 0\n" +
+            BIN_SETTINGS + " put secure screensaver_enabled 0\n" +
+            // Android 14 的 cached app freezer 不看屏幕状态（亮屏时也照样冻 cached 进程），
+            // 所以"framework 不休眠"并不能保护挂机应用；关屏期间直接全局关掉，恢复时还原
+            "FZ=$(" + BIN_SETTINGS + " get global cached_apps_freezer 2>/dev/null)\n" +
+            "echo \"$FZ\" > " + FREEZER_FILE + " 2>/dev/null\n" +
+            BIN_SETTINGS + " put global cached_apps_freezer disabled\n" +
             // 由 root 直接持有的内核 wakelock：不依赖应用进程，冻结/被杀都不影响，确保不休眠
             "echo " + KERNEL_WAKELOCK + " > /sys/power/wake_lock 2>/dev/null\n" +
+            // targetSdk 35 下从磁贴回调里 startForegroundService 会被 AMS 拒绝
+            // (Background started FGS: Disallowed, uidState: CAC)
+            // 改由 root 拉起，uid 0 在 allowlist 里，实测可成功
+            BIN_AM + " start-foreground-service -n com.screenoff.tile/.KeepAliveService >/dev/null 2>&1\n" +
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 1 > \"$BL\"\n" +
             touchLoop("1") +
+            "sleep 1\n" +
+            "W1=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\n" +
+            "FG=$(dumpsys activity services com.screenoff.tile 2>/dev/null | grep -c 'isForeground=true')\n" +
+            "echo \"wake=$W1 fgs=$FG freezer=$(" + BIN_SETTINGS + " get global cached_apps_freezer) bl=$(cat $BL 2>/dev/null)\"\n" +
             "echo DONE_OFF\n";
-        String out = runRoot(script);
+        String out = runRoot(withLog(script));
         if (out.contains("DONE_OFF")) {
             prefs.edit().putBoolean(KEY_OFF, true).apply();
             acquireWakeLock();
+            // 兜底：root 那条 am 失败时才由应用自己尝试（Android 14 多半会被拒）
             startKeepAlive(app);
             startVolumeMonitor();
             startWatchdog(android.os.Process.myPid());
@@ -204,6 +260,9 @@ public class ScreenController {
     /** 恢复屏幕：背光亮 + 触摸启用 + 恢复之前的 stayon 设置 */
     public boolean turnScreenOn() {
         String script =
+            // framework 若被电源键按下去了(AOD/Doze), 只写 bl_power=0 屏幕是黑的, 先唤醒
+            "W0=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\n" +
+            "if [ \"$W0\" != \"Awake\" ]; then " + BIN_INPUT + " keyevent 224; sleep 1; fi\n" +
             // 先杀 watchdog 再恢复, 避免其恢复分支与本函数竞争 stayon 备份文件
             "P=$(cat " + WATCHDOG_PID + " 2>/dev/null)\n" +
             "[ -n \"$P\" ] && kill \"$P\" 2>/dev/null\n" +
@@ -213,8 +272,9 @@ public class ScreenController {
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
             touchLoop("0") +
             restoreStayon() +
+            "echo \"ON wake=$(dumpsys power 2>/dev/null | sed -n 's/^  mWakefulness=//p' | head -n1)\"\n" +
             "echo DONE_ON\n";
-        String out = runRoot(script);
+        String out = runRoot(withLog(script));
         // 取消屏幕亮起监听，避免重复调用
         try { app.unregisterReceiver(screenOnReceiver); } catch (Exception ignored) {}
         releaseWakeLock();
@@ -277,19 +337,29 @@ public class ScreenController {
         } catch (Exception ignored) {}
     }
 
-    /** 监听音量键作为“恢复”快捷键（触摸已被禁用时的唯一物理入口） */
+    /** 监听音量键/电源键作为"恢复"快捷键（触摸已被禁用时的唯一物理入口） */
     private void startVolumeMonitor() {
         stopVolumeMonitor();
         final ScreenController self = this;
         final Thread t = new Thread(() -> {
             try {
                 Process p = new ProcessBuilder("su", "-c", "getevent").redirectErrorStream(true).start();
+                volProc = p;
                 BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
                 String line;
                 while (!Thread.currentThread().isInterrupted() && (line = r.readLine()) != null) {
-                    // 音量键 code: 0x72=VOLUMEDOWN 0x73=VOLUMEUP，按下 value=1
-                    if ((line.contains(" 0072 ") || line.contains(" 0073 ")) && line.trim().endsWith("00000001")) {
+                    boolean pressed = line.trim().endsWith("00000001");
+                    // 音量键 code: 0x72=VOLUMEDOWN 0x73=VOLUMEUP，电源键 0x74=KEY_POWER
+                    // 电源键必须处理：framework 认为屏幕还亮着，按电源键它会"睡觉"(AOD)，
+                    // 而不会唤醒 —— 用户按电源键的本意基本都是要屏幕回来
+                    boolean vol = pressed && (line.contains(" 0072 ") || line.contains(" 0073 "));
+                    boolean power = pressed && line.contains(" 0074 ");
+                    if (vol || power) {
                         p.destroy();
+                        if (power) {
+                            // 先唤醒 framework，否则只写 bl_power=0 屏幕还是黑的
+                            self.runRoot(BIN_INPUT + " keyevent 224");
+                        }
                         self.turnScreenOn();
                         break;
                     }
@@ -307,6 +377,12 @@ public class ScreenController {
             t.interrupt();
             volMonitor = null;
         }
+        // 只 interrupt 线程不会杀掉 getevent 子进程，否则每关一次屏就漏一个 root 进程
+        Process p = volProc;
+        if (p != null) {
+            try { p.destroy(); } catch (Exception ignored) {}
+            volProc = null;
+        }
     }
 
     /**
@@ -318,6 +394,7 @@ public class ScreenController {
     private void startWatchdog(int pid) {
         String body =
             "echo $$ > " + WATCHDOG_PID + "\n" +
+            "echo \"$(/system/bin/date +%H:%M:%S) watchdog start pid=$$\" >> " + LOG_FILE + "\n" +
             "P=/proc/" + pid + "\n" +
             "BLF=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "sleep 2\n" +
@@ -327,6 +404,7 @@ public class ScreenController {
             "  B=$(cat \"$BLF\" 2>/dev/null)\n" +
             "  # 只在真正全亮(bl=0)时代为恢复; AOD(bl=4)仍属灭屏, 不能提前释放触摸\n" +
             "  if [ \"$B\" = \"0\" ]; then\n" +
+            "    echo \"$(/system/bin/date +%H:%M:%S) watchdog restore: bl=0\" >> " + LOG_FILE + "\n" +
             touchLoop("0") +
             recoverCommon() +
             restoreStayon() +
@@ -336,6 +414,7 @@ public class ScreenController {
             "  fi\n" +
             "  sleep 1\n" +
             "done\n" +
+            "echo \"$(/system/bin/date +%H:%M:%S) watchdog restore: app gone\" >> " + LOG_FILE + "\n" +
             "BL=$(ls /sys/class/backlight/*/bl_power 2>/dev/null | head -n1)\n" +
             "[ -n \"$BL\" ] && echo 0 > \"$BL\"\n" +
             touchLoop("0") +

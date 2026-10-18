@@ -83,23 +83,26 @@ public class MainActivity extends Activity {
 
         Button btnOff = new Button(this);
         btnOff.setText(R.string.btn_off);
-        btnOff.setOnClickListener(v -> {
+        // su 调用（多次）不能占主线程，否则界面卡死/ANR
+        btnOff.setOnClickListener(v -> new Thread(() -> {
             if (!ScreenController.isRootAvailable()) {
-                showNoRoot();
+                runOnUiThread(this::showNoRoot);
                 return;
             }
-            boolean ok = new ScreenController(this).turnScreenOff();
-            showResult(getString(R.string.result_off), ok);
-            handler.postDelayed(this::refreshStatus, 800);
-        });
+            boolean ok = new ScreenController(getApplicationContext()).turnScreenOff();
+            runOnUiThread(() -> {
+                showResult(getString(R.string.result_off), ok);
+                handler.postDelayed(this::refreshStatus, 800);
+            });
+        }, "btn-off").start());
         root.addView(btnOff);
 
         Button btnOn = new Button(this);
         btnOn.setText(R.string.btn_on);
-        btnOn.setOnClickListener(v -> {
-            new ScreenController(this).turnScreenOn();
-            refreshStatus();
-        });
+        btnOn.setOnClickListener(v -> new Thread(() -> {
+            new ScreenController(getApplicationContext()).turnScreenOn();
+            runOnUiThread(this::refreshStatus);
+        }, "btn-on").start());
         root.addView(btnOn);
 
         Button btnTile = new Button(this);
@@ -134,14 +137,15 @@ public class MainActivity extends Activity {
     }
 
     private void refreshStatus() {
-        boolean root = ScreenController.isRootAvailable();
-        rootText.setText(root ? getString(R.string.root_ok) : getString(R.string.root_missing));
-
-        boolean off = new ScreenController(this).isScreenOff();
-        statusText.setText(off ? getString(R.string.status_off) : getString(R.string.status_on));
-
-        // 更新无障碍状态（按钮文字在 buildUi 里创建，这里通过 findViewById 不适用；用字段记录）
-        updateAccessibilityStatus();
+        new Thread(() -> {
+            final boolean root = ScreenController.isRootAvailable();
+            final boolean off = new ScreenController(getApplicationContext()).isScreenOff();
+            runOnUiThread(() -> {
+                rootText.setText(root ? getString(R.string.root_ok) : getString(R.string.root_missing));
+                statusText.setText(off ? getString(R.string.status_off) : getString(R.string.status_on));
+                updateAccessibilityStatus();
+            });
+        }, "refresh-status").start();
     }
 
     private TextView accStatusView;
